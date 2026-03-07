@@ -1,7 +1,6 @@
 #include <iostream>
 
-#include "server.hpp"
-#include "client.hpp"
+#include "tcp.hpp"
 
 int main(int argc, char* argv[])
 {
@@ -14,10 +13,10 @@ int main(int argc, char* argv[])
 
     if(c == 's')
     {
-        open();
+        launch_server();
     }
     else if(c == 'c')
     {
-        sconnect();
+        connect_client();
     }
 }
