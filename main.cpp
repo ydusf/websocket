@@ -4,6 +4,8 @@
 
 int main(int argc, char* argv[])
 {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+
     if(argc <= 1)
     {
         return 1;

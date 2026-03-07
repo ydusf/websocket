@@ -3,11 +3,15 @@
 #include <print>
 #include <iostream>
 #include <string_view>
+#include <string>
+#include <cstring>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+
+#include "crypto.hpp"
 
 std::pair<int, sockaddr_in> create_address()
 {
@@ -56,11 +60,55 @@ void launch_server()
 
     for(;;)
     {
-        socklen_t length = sizeof(address);
-        int accept_fdesc = accept(sock_fdesc, reinterpret_cast<sockaddr*>(&address), &length);
+        sockaddr_in client_address{};
+        socklen_t length = sizeof(client_address);
+        int accept_fdesc = accept(sock_fdesc, reinterpret_cast<sockaddr*>(&client_address), &length);
         std::println("Client connected");
 
         char buffer[4096] = {0};
+
+        ssize_t bytes_read = recv(accept_fdesc, buffer, sizeof(buffer) - 1, 0);
+        if(bytes_read <= 0)
+        {
+            std::println("Client disconnected");
+            close(accept_fdesc);
+            continue;
+        }
+        buffer[bytes_read] = '\0';
+
+        std::string req(buffer);
+        std::string key_header = "Sec-WebSocket-Key: ";
+        size_t key_pos = req.find(key_header);
+
+        if(key_pos != std::string::npos)
+        {
+            key_pos += key_header.length();
+            size_t end_pos = req.find("\r\n", key_pos);
+            std::string client_key = req.substr(key_pos, end_pos - key_pos);
+
+            std::string magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+            std::string combined = client_key + magic_string;
+
+            std::string accept_key = sha1_and_base64(combined);
+
+            std::string response = 
+                "HTTP/1.1 101 Switching Protocols\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                "Sec-WebSocket-Accept: " + accept_key + "\r\n"
+                "\r\n";
+
+            send(accept_fdesc, response.data(), response.length(), 0);
+            std::println("WebSocket Upgrade successful!");
+        }
+        else
+        {
+            std::println("Invalid WebSocket request received");
+            close(accept_fdesc);
+            continue;
+        }
+        
+        memset(buffer, 0, 4096);
         for(;;)
         {
             ssize_t bytes_read = recv(accept_fdesc, buffer, sizeof(buffer) - 1, 0);
@@ -71,9 +119,7 @@ void launch_server()
                 break;
             }
 
-            buffer[bytes_read] = '\0';
-
-            std::println("Recieved: {}", std::string_view{buffer});
+            std::println("Received raw bytes: {}", bytes_read);
         }
         
         close(accept_fdesc);
@@ -105,15 +151,45 @@ void connect_client()
         return;
     }
     std::println("Connected to server");
-    
+
+    std::string base64 = generate_random_base64(16);
+    std::string req = 
+        "GET /chat HTTP/1.1\r\n"
+        "Host: 127.0.0.1:8080\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: " + base64 + "\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n";
+
+    if(send(sock_fdesc, req.data(), req.length(), 0) <= 0)
+    {
+        std::println("Server not running");
+        return;
+    }
+
+    char handshake_buffer[1024] = {0};
+    ssize_t bytes_read = recv(sock_fdesc, handshake_buffer, sizeof(handshake_buffer) - 1, 0);
+    if(bytes_read <= 0)
+    {
+        std::println("Handshake failed");
+        return;
+    }
+    std::println("Handshake response: {}", handshake_buffer);
+
     char buffer[4096] = {0};
     for(;;)
     {
-        std::cin.getline(buffer, sizeof(buffer));
+        if (!std::cin.getline(buffer, sizeof(buffer))) 
+        {
+            std::println("Input stream closed or invalid.");
+            std::fflush(stdout);
+            break;
+        }
+        
         if (strlen(buffer) == 0) continue;
         
         ssize_t bytes_sent = send(sock_fdesc, buffer, strlen(buffer), 0);
-
         if(bytes_sent <= 0)
         {
             std::println("Server not running");
@@ -121,8 +197,7 @@ void connect_client()
         }
 
         std::println("Sent: {}", static_cast<const char*>(buffer));
-
-        // sleep(1);
+        std::fflush(stdout);
     }
 
     close(sock_fdesc);
