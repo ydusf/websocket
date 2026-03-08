@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <vector>
 #include <span>
+#include <utility>
+#include <optional>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -42,6 +44,43 @@ struct SocketFD
     }
 };
 
+struct Frame
+{
+    std::vector<uint8_t> payload;
+    uint64_t actual_payload_length;
+    uint8_t mask_key[4];
+    uint8_t initial_payload_length;
+    uint8_t fin;
+    uint8_t opcode;
+    uint8_t mask_flag;
+
+    void print()
+    {
+        std::cout << "FIN: " << static_cast<int>(fin) << '\n';
+        std::cout << "Opcode: " << static_cast<int>(opcode) << '\n';
+        std::cout << "Mask flag: " << static_cast<int>(mask_flag) << '\n';
+        
+        if(mask_flag == 1)
+        {
+            std::cout << "Mask key: ";
+            for(int i = 0; i < 4; ++i) 
+            {
+                std::cout << std::hex << static_cast<int>(mask_key[i]) << " " << std::dec; 
+            }
+            std::cout << '\n';
+        }
+
+        std::cout << "Payload: ";
+        for(uint8_t byte : payload)
+        {
+            std::cout << static_cast<char>(byte); 
+        }
+        std::cout << '\n';
+    }
+    
+};
+
+
 inline std::pair<int, sockaddr_in> create_address()
 {
     sockaddr_in address{};
@@ -56,108 +95,135 @@ inline int create_socket()
     return socket(AF_INET, SOCK_STREAM, 0); 
 }
 
-inline void parse_ws_frame(std::span<uint8_t> bytes)
+inline std::vector<uint8_t> serialize_ws_frame(std::string_view message)
+{
+    std::vector<uint8_t> frame;
+    size_t length = message.length();
+
+    frame.push_back(0b10000001);
+
+    if (length <= 125) 
+    {
+        frame.push_back(0b10000000 | static_cast<uint8_t>(length));
+    } 
+    else if (length <= 65535) 
+    {
+        frame.push_back(0b10000000 | 126);
+        frame.push_back(static_cast<uint8_t>((length >> 8) & 0b11111111));
+        frame.push_back(static_cast<uint8_t>(length & 0b11111111));
+    } 
+    else 
+    {
+        frame.push_back(0b10000000 | 127);
+        for (int i = 7; i >= 0; --i) 
+        {
+            frame.push_back(static_cast<uint8_t>((length >> (i * 8)) & 0b11111111));
+        }
+    }
+
+    uint8_t mask_key[4] = { 
+        static_cast<uint8_t>(rand() % 256), 
+        static_cast<uint8_t>(rand() % 256), 
+        static_cast<uint8_t>(rand() % 256), 
+        static_cast<uint8_t>(rand() % 256) 
+    };
+    
+    for (int i = 0; i < 4; ++i) 
+    {
+        frame.push_back(mask_key[i]);
+    }
+
+    for (size_t i = 0; i < length; ++i) 
+    {
+        frame.push_back(message[i] ^ mask_key[i % 4]);
+    }
+
+    return frame;
+}
+
+inline std::optional<Frame> deserialize_ws_frame(std::span<uint8_t> bytes)
 {   
     size_t bytes_length = bytes.size();
     if(bytes_length < 2)
     {
         std::cerr << "WebSocket Frame is too small (< 2 bytes)\n";
-        return;
+        return std::nullopt;
     }
+
+    Frame frame{};
 
     uint64_t current_byte = 0;
     
-    uint8_t fin = (bytes[current_byte] >> 7) & 0b00000001; 
-    uint8_t opcode = bytes[current_byte] & 0b00001111;
+    frame.fin = (bytes[current_byte] >> 7) & 0b00000001; 
+    frame.opcode = bytes[current_byte] & 0b00001111;
 
     current_byte += 1;
-    uint8_t mask_flag = (bytes[current_byte] >> 7) & 0b00000001;
-    uint8_t initial_payload_length = bytes[current_byte] & 0b01111111;
+    frame.mask_flag = (bytes[current_byte] >> 7) & 0b00000001;
+    frame.initial_payload_length = bytes[current_byte] & 0b01111111;
 
     current_byte += 1;
 
-    uint64_t actual_payload_length = initial_payload_length;
+    frame.actual_payload_length = frame.initial_payload_length;
     
-    if(initial_payload_length == 126)
+    if(frame.initial_payload_length == 126)
     {
         if (current_byte + 2 > bytes_length) 
         {
-            return;
+            return std::nullopt;
         }
         
-        actual_payload_length = (static_cast<uint64_t>(bytes[current_byte]) << 8) | static_cast<uint64_t>(bytes[current_byte+1]);
+        frame.actual_payload_length = (static_cast<uint64_t>(bytes[current_byte]) << 8) | static_cast<uint64_t>(bytes[current_byte+1]);
         current_byte += 2;
     }
-    else if(initial_payload_length == 127)
+    else if(frame.initial_payload_length == 127)
     {
         if (current_byte + 8 > bytes_length) 
         {
-            return;
+            return std::nullopt;
         }
         
-        actual_payload_length = 0;
+        frame.actual_payload_length = 0;
         for(size_t i = 0; i < 8; ++i)
         {
-            actual_payload_length = (actual_payload_length << 8) | bytes[current_byte + i];
+            frame.actual_payload_length = (frame.actual_payload_length << 8) | bytes[current_byte + i];
         }
         current_byte += 8;
     }
 
-    uint8_t mask_key[4] = {0};
-    if(mask_flag == 1)
+    if(frame.mask_flag == 1)
     {
         if (current_byte + 4 > bytes_length) 
         {
-            return;
+            return std::nullopt;
         }
         
         for(size_t i = 0; i < 4; ++i)
         {
-            mask_key[i] = bytes[current_byte + i];
+            frame.mask_key[i] = bytes[current_byte + i];
         }
         current_byte += 4;
     }
 
-    if (current_byte + actual_payload_length > bytes_length) 
+    if (current_byte + frame.actual_payload_length > bytes_length) 
     {
-        return;
+        return std::nullopt;
     }
 
-    std::vector<uint8_t> payload{};
-    payload.reserve(actual_payload_length);
-    for(size_t i = 0; i < actual_payload_length; ++i)
+    frame.payload.reserve(frame.actual_payload_length);
+    for(size_t i = 0; i < frame.actual_payload_length; ++i)
     {
-        payload.push_back(bytes[current_byte + i]);
+        frame.payload.push_back(bytes[current_byte + i]);
     }
 
-    if(mask_flag == 1)
+    if(frame.mask_flag == 1)
     {
-        for(size_t i = 0; i < payload.size(); ++i)
+        for(size_t i = 0; i < frame.payload.size(); ++i)
         {
-            payload[i] = payload[i] ^ mask_key[i % 4];
+            frame.payload[i] = frame.payload[i] ^ frame.mask_key[i % 4];
         }
     }
 
-    std::cout << "FIN: " << static_cast<int>(fin) << '\n';
-    std::cout << "Opcode: " << static_cast<int>(opcode) << '\n';
-    std::cout << "Mask flag: " << static_cast<int>(mask_flag) << '\n';
-    
-    if(mask_flag == 1)
-    {
-        std::cout << "Mask key: ";
-        for(int i = 0; i < 4; ++i) 
-        {
-            std::cout << std::hex << static_cast<int>(mask_key[i]) << " " << std::dec; 
-        }
-        std::cout << '\n';
-    }
-
-    std::cout << "Payload: ";
-    for(uint8_t byte : payload)
-    {
-        std::cout << static_cast<char>(byte); 
-    }
-    std::cout << '\n';
+    return frame;
 }
 
 inline void launch_server()
@@ -253,9 +319,11 @@ inline void launch_server()
                 break;
             }
 
-            parse_ws_frame(std::span(bytes.data(), frame_bytes_read));
-            std::println();
-            std::println("Received raw bytes: {}", frame_bytes_read);
+            std::optional<Frame> frame = deserialize_ws_frame(std::span(bytes.data(), frame_bytes_read));
+            if(frame.has_value())
+            {
+                frame->print();
+            }
         }
     }
 }
@@ -322,8 +390,10 @@ inline void connect_client()
         }
         
         if (input_buffer.empty()) continue;
-        
-        ssize_t bytes_sent = send(client_sock, input_buffer.data(), input_buffer.length(), 0);
+
+        std::vector<uint8_t> serialized_ws_frame = serialize_ws_frame(input_buffer);
+
+        ssize_t bytes_sent = send(client_sock, serialized_ws_frame.data(), serialized_ws_frame.size(), 0);
         if(bytes_sent <= 0)
         {
             std::println("Server not running");
