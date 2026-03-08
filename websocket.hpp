@@ -66,7 +66,7 @@ struct Frame
     uint8_t opcode;
     uint8_t mask_flag;
 
-    void print()
+    void print() const
     {
         std::cout << "FIN: " << static_cast<int>(fin) << '\n';
         std::cout << "Opcode: " << static_cast<int>(opcode) << '\n';
@@ -83,15 +83,32 @@ struct Frame
         }
 
         std::cout << "Payload: ";
+        print_payload();
+        std::cout << '\n';
+    }
+
+    void print_payload() const
+    {
         for(uint8_t byte : payload)
         {
             std::cout << static_cast<char>(byte); 
         }
-        std::cout << '\n';
     }
-    
 };
 
+struct Message
+{
+    std::vector<Frame> frames;
+
+    void print() const
+    {
+        for(const Frame& frame : frames)
+        {   
+            frame.print_payload();
+        }
+        std::cout << '\n';
+    }
+};
 
 inline std::pair<int, sockaddr_in> create_address()
 {
@@ -335,6 +352,7 @@ inline void launch_server()
             continue;
         }
         
+        Message message;
         std::vector<uint8_t> buffer;
         for(;;)
         {            
@@ -353,8 +371,15 @@ inline void launch_server()
                 auto [frame, consumed_bytes] = deserialize_ws_frame(buffer);
                 if(frame.has_value())
                 {
-                    frame->print();
+                    uint8_t fin = frame->fin;
+                    message.frames.push_back(std::move(*frame));
                     buffer.erase(buffer.begin(), buffer.begin() + consumed_bytes);
+
+                    if(fin == 1)
+                    {
+                        message.print();
+                        message.frames.clear();
+                    }
                 }
                 else
                 {
