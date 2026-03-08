@@ -6,6 +6,7 @@
 #include <string>
 #include <cstddef>
 #include <vector>
+#include <span>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -55,9 +56,13 @@ inline int create_socket()
     return socket(AF_INET, SOCK_STREAM, 0); 
 }
 
-inline void parse_ws_frame(const std::vector<uint8_t>& bytes)
+inline void parse_ws_frame(std::span<uint8_t> bytes)
 {   
-    
+    for(uint8_t byte : bytes)
+    {
+        std::cout << byte;
+    }
+    std::cout << '\n';
 }
 
 inline void launch_server()
@@ -153,10 +158,7 @@ inline void launch_server()
                 break;
             }
 
-            for(ssize_t i = 0; i < frame_bytes_read; ++i)
-            {
-                std::cout << bytes[i];
-            }
+            parse_ws_frame(std::span(bytes.data(), frame_bytes_read));
             std::println();
             std::println("Received raw bytes: {}", frame_bytes_read);
         }
