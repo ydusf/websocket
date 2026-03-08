@@ -9,6 +9,7 @@
 #include <span>
 #include <utility>
 #include <optional>
+#include <algorithm>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -17,10 +18,13 @@
 
 #include "crypto.hpp"
 
-static constexpr ushort BUFFER_SIZE = 4096;
-static constexpr ushort HANDSHAKE_BUFFER_SIZE = 1024;
-static constexpr ushort PORT = 8080;
+static constexpr uint16_t PORT = 8080;
 static constexpr const char* ADDRESS = "127.0.0.1";
+
+static constexpr uint16_t HANDSHAKE_BUFFER_SIZE = 1024;
+static constexpr uint16_t BUFFER_WS_SIZE = 20;
+static constexpr uint8_t LARGEST_WS_FRAME_HEADER = 14;
+static constexpr uint16_t LARGEST_WS_PAYLOAD = BUFFER_WS_SIZE - LARGEST_WS_FRAME_HEADER;
 
 struct SocketFD 
 {
@@ -95,12 +99,20 @@ inline int create_socket()
     return socket(AF_INET, SOCK_STREAM, 0); 
 }
 
-inline std::vector<uint8_t> serialize_ws_frame(std::string_view message)
+inline std::vector<uint8_t> serialize_ws_frame(std::string_view message, bool last_message)
 {
     std::vector<uint8_t> frame;
     size_t length = message.length();
 
-    frame.push_back(0b10000001);
+    if(last_message)
+    {
+        frame.push_back(0b10000001);
+    }
+    else
+    {
+        frame.push_back(0b00000001);
+    }
+    
 
     if (length <= 125) 
     {
@@ -269,18 +281,18 @@ inline void launch_server()
         inet_ntop(AF_INET, &client_address.sin_addr, client_ip, INET_ADDRSTRLEN);
         std::println("Client: {}:{} connected", client_ip, ntohs(client_address.sin_port));
 
-        std::string buffer;
-        buffer.resize(BUFFER_SIZE);
+        std::string handshake_buffer;
+        handshake_buffer.resize(HANDSHAKE_BUFFER_SIZE);
         
-        ssize_t bytes_read = recv(client_sock, buffer.data(), buffer.size(), 0);
+        ssize_t bytes_read = recv(client_sock, handshake_buffer.data(), handshake_buffer.size(), 0);
         if(bytes_read <= 0)
         {
             std::println("Client disconnected during handshake");
             continue;
         }
-        buffer.resize(bytes_read);
+        handshake_buffer.resize(bytes_read);
 
-        std::string_view req_view(buffer);
+        std::string_view req_view(handshake_buffer);
         std::string_view key_header = "Sec-WebSocket-Key: ";
         size_t key_pos = req_view.find(key_header);
 
@@ -309,7 +321,7 @@ inline void launch_server()
             continue;
         }
         
-        std::vector<uint8_t> bytes(BUFFER_SIZE);
+        std::vector<uint8_t> bytes(BUFFER_WS_SIZE);
         for(;;)
         {            
             ssize_t frame_bytes_read = recv(client_sock, bytes.data(), bytes.size(), 0);
@@ -389,16 +401,28 @@ inline void connect_client()
             break;
         }
         
-        if (input_buffer.empty()) continue;
-
-        std::vector<uint8_t> serialized_ws_frame = serialize_ws_frame(input_buffer);
-
-        ssize_t bytes_sent = send(client_sock, serialized_ws_frame.data(), serialized_ws_frame.size(), 0);
-        if(bytes_sent <= 0)
+        const size_t payload_size = input_buffer.size();
+        for(size_t i{}; i <= payload_size / LARGEST_WS_PAYLOAD; ++i)
         {
-            std::println("Server not running");
-            break;
+            bool last_message = false;
+            size_t start = LARGEST_WS_PAYLOAD * i;
+            size_t end = start + LARGEST_WS_PAYLOAD;
+            if(payload_size < start + LARGEST_WS_PAYLOAD)
+            {
+                end = payload_size;
+                last_message = true;
+            }
+
+            std::string_view frame_message = std::string_view(input_buffer).substr(start, end);
+            std::vector<uint8_t> serialized_ws_frame = serialize_ws_frame(frame_message, last_message);
+
+            ssize_t bytes_sent = send(client_sock, serialized_ws_frame.data(), serialized_ws_frame.size(), 0);
+            if(bytes_sent <= 0)
+            {
+                std::println("Server not running");
+                break;
+            }
+            std::println("Sent: {}", frame_message);
         }
-        std::println("Sent: {}", input_buffer);
     }
 }
