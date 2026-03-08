@@ -26,6 +26,14 @@ static constexpr uint16_t BUFFER_WS_SIZE = 20;
 static constexpr uint8_t LARGEST_WS_FRAME_HEADER = 14;
 static constexpr uint16_t LARGEST_WS_PAYLOAD = BUFFER_WS_SIZE - LARGEST_WS_FRAME_HEADER;
 
+enum class FragmentType
+{
+    SINGLE,
+    FIRST,
+    CONTINUATION,
+    LAST
+};
+
 struct SocketFD 
 {
     int _fdesc;
@@ -99,21 +107,27 @@ inline int create_socket()
     return socket(AF_INET, SOCK_STREAM, 0); 
 }
 
-inline std::vector<uint8_t> serialize_ws_frame(std::string_view message, bool last_message)
+inline std::vector<uint8_t> serialize_ws_frame(std::string_view message, FragmentType fragment_type)
 {
     std::vector<uint8_t> frame;
     size_t length = message.length();
 
-    if(last_message)
+    switch (fragment_type) 
     {
-        frame.push_back(0b10000001);
-    }
-    else
-    {
-        frame.push_back(0b00000001);
+        case FragmentType::SINGLE: 
+            frame.push_back(0b10000001); // FIN=1, Opcode=1
+            break;
+        case FragmentType::FIRST:  
+            frame.push_back(0b00000001); // FIN=0, Opcode=1
+            break;
+        case FragmentType::CONTINUATION: 
+            frame.push_back(0b00000000); // FIN=0, Opcode=0
+            break;
+        case FragmentType::LAST:   
+            frame.push_back(0b10000000); // FIN=1, Opcode=0
+            break;
     }
     
-
     if (length <= 125) 
     {
         frame.push_back(0b10000000 | static_cast<uint8_t>(length));
@@ -400,26 +414,45 @@ inline void connect_client()
             std::println("Input stream closed or invalid.");
             break;
         }
+
+        if (input_buffer.empty()) 
+        {
+            auto serialized_ws_frame = serialize_ws_frame("", FragmentType::SINGLE);
+            send(client_sock, serialized_ws_frame.data(), serialized_ws_frame.size(), 0);
+            continue;
+        }
         
         const size_t payload_size = input_buffer.size();
-        for(size_t i{}; i <= payload_size / LARGEST_WS_PAYLOAD; ++i)
+        
+        for (size_t start = 0; start < payload_size; start += LARGEST_WS_PAYLOAD) 
         {
-            bool last_message = false;
-            size_t start = LARGEST_WS_PAYLOAD * i;
-            size_t end = start + LARGEST_WS_PAYLOAD;
-            if(payload_size < start + LARGEST_WS_PAYLOAD)
+            size_t count = std::min(static_cast<size_t>(LARGEST_WS_PAYLOAD), payload_size - start);
+            std::string_view frame_message = std::string_view(input_buffer).substr(start, count);
+            
+            FragmentType type;
+            if (payload_size <= LARGEST_WS_PAYLOAD) 
             {
-                end = payload_size;
-                last_message = true;
+                type = FragmentType::SINGLE;
+            } 
+            else if (start == 0) 
+            {
+                type = FragmentType::FIRST;
+            } 
+            else if (start + count >= payload_size) 
+            {
+                type = FragmentType::LAST;
+            } 
+            else 
+            {
+                type = FragmentType::CONTINUATION;
             }
 
-            std::string_view frame_message = std::string_view(input_buffer).substr(start, end);
-            std::vector<uint8_t> serialized_ws_frame = serialize_ws_frame(frame_message, last_message);
+            std::vector<uint8_t> serialized_ws_frame = serialize_ws_frame(frame_message, type);
 
             ssize_t bytes_sent = send(client_sock, serialized_ws_frame.data(), serialized_ws_frame.size(), 0);
             if(bytes_sent <= 0)
             {
-                std::println("Server not running");
+                std::println("Server disconnected");
                 break;
             }
             std::println("Sent: {}", frame_message);
