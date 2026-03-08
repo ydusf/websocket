@@ -4,7 +4,6 @@
 #include <iostream>
 #include <string_view>
 #include <string>
-#include <cstring>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -35,8 +34,6 @@ int create_socket()
     int sock_fdesc = socket(domain, type, protocol); 
     return sock_fdesc;
 }
-
-
 
 void launch_server()
 {
@@ -75,33 +72,35 @@ void launch_server()
             std::println("Client failed to connect");
             return;
         }
+
         char client_ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &client_address.sin_addr, client_ip, INET_ADDRSTRLEN);
         std::println("Client: {}:{} connected", client_ip, ntohs(client_address.sin_port));
 
-        char buffer[BUFFER_SIZE] = {0};
-        ssize_t bytes_read = recv(accept_fdesc, buffer, sizeof(buffer) - 1, 0);
+        std::string buffer;
+        buffer.resize(BUFFER_SIZE);
+        
+        ssize_t bytes_read = recv(accept_fdesc, buffer.data(), buffer.size(), 0);
         if(bytes_read <= 0)
         {
             std::println("Client disconnected");
             close(accept_fdesc);
             continue;
         }
-        buffer[bytes_read] = '\0';
+        buffer.resize(bytes_read);
 
-        std::string req(buffer);
-        std::string key_header = "Sec-WebSocket-Key: ";
-        size_t key_pos = req.find(key_header);
+        std::string_view req_view(buffer);
+        std::string_view key_header = "Sec-WebSocket-Key: ";
+        size_t key_pos = req_view.find(key_header);
 
-        if(key_pos != std::string::npos)
+        if(key_pos != std::string_view::npos)
         {
             key_pos += key_header.length();
-            size_t end_pos = req.find("\r\n", key_pos);
-            std::string client_key = req.substr(key_pos, end_pos - key_pos);
+            size_t end_pos = req_view.find("\r\n", key_pos);
+            std::string_view client_key = req_view.substr(key_pos, end_pos - key_pos);
 
             std::string magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-            std::string combined = client_key + magic_string;
-
+            std::string combined = std::string(client_key) + magic_string;
             std::string accept_key = sha1_and_base64(combined);
 
             std::string response = 
@@ -121,16 +120,17 @@ void launch_server()
             continue;
         }
         
-        memset(buffer, 0, BUFFER_SIZE);
         for(;;)
         {
-            ssize_t bytes_read = recv(accept_fdesc, buffer, sizeof(buffer) - 1, 0);
+            buffer.resize(BUFFER_SIZE);
+
+            ssize_t bytes_read = recv(accept_fdesc, buffer.data(), buffer.size(), 0);
             if(bytes_read <= 0)
             {
                 std::println("Client disconnected");
                 break;
             }
-            buffer[bytes_read] = '\0';
+            buffer.resize(bytes_read);
 
             std::println("Received: {}", buffer);
             std::println("Received raw bytes: {}", bytes_read);
@@ -151,14 +151,14 @@ void connect_client()
         return;
     }
 
-    std::pair<int, sockaddr_in> address = create_address();
-    if (address.first <= 0) 
+    auto [is_valid, address] = create_address();
+    if (is_valid <= 0) 
     {
         std::println("Invalid address");
         return;
     }
 
-    int status = connect(sock_fdesc, reinterpret_cast<sockaddr*>(&address.second), sizeof(address.second));
+    int status = connect(sock_fdesc, reinterpret_cast<sockaddr*>(&address), sizeof(address));
     if(status < 0)
     {
         std::println("Server not running");
@@ -182,35 +182,37 @@ void connect_client()
         return;
     }
 
-    char handshake_buffer[HANDSHAKE_BUFFER_SIZE] = {0};
-    ssize_t bytes_read = recv(sock_fdesc, handshake_buffer, sizeof(handshake_buffer) - 1, 0);
+    std::string handshake_buffer;
+    handshake_buffer.resize(HANDSHAKE_BUFFER_SIZE);
+
+    ssize_t bytes_read = recv(sock_fdesc, handshake_buffer.data(), handshake_buffer.size(), 0);
     if(bytes_read <= 0)
     {
         std::println("Handshake failed");
         return;
     }
+    handshake_buffer.resize(bytes_read);
     std::println("Handshake response: {}", handshake_buffer);
 
-    char buffer[BUFFER_SIZE] = {0};
+    std::string input_buffer;
     for(;;)
     {
-        if (!std::cin.getline(buffer, sizeof(buffer))) 
+        if (!std::getline(std::cin, input_buffer)) 
         {
             std::println("Input stream closed or invalid.");
             std::fflush(stdout);
             break;
         }
         
-        if (strlen(buffer) == 0) continue;
+        if (input_buffer.empty()) continue;
         
-        ssize_t bytes_sent = send(sock_fdesc, buffer, strlen(buffer), 0);
+        ssize_t bytes_sent = send(sock_fdesc, input_buffer.data(), input_buffer.length(), 0);
         if(bytes_sent <= 0)
         {
             std::println("Server not running");
             break;
         }
-
-        std::println("Sent: {}", static_cast<const char*>(buffer));
+        std::println("Sent: {}", input_buffer);
         std::fflush(stdout);
     }
 
