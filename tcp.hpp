@@ -13,23 +13,30 @@
 
 #include "crypto.hpp"
 
+static constexpr ushort BUFFER_SIZE = 4096;
+static constexpr ushort HANDSHAKE_BUFFER_SIZE = 1024;
+static constexpr ushort PORT = 8080;
+static constexpr const char* ADDRESS = "127.0.0.1";
+
 std::pair<int, sockaddr_in> create_address()
 {
     sockaddr_in address{};
     address.sin_family = AF_INET;
-    address.sin_port = htons(8080); // host byte order -> network byte order
-    int result = inet_pton(AF_INET, "127.0.0.1", &address.sin_addr); // IPv4 address -> binary format
+    address.sin_port = htons(PORT); // host byte order -> network byte order
+    int result = inet_pton(AF_INET, ADDRESS, &address.sin_addr); // IPv4 address -> binary format
     return std::make_pair(result, address);
 }
 
 int create_socket()
 {
-    int domain = PF_INET; // IPv4
+    int domain = AF_INET; // IPv4
     int type = SOCK_STREAM;
     int protocol = 0; // TCP
     int sock_fdesc = socket(domain, type, protocol); 
     return sock_fdesc;
 }
+
+
 
 void launch_server()
 {
@@ -56,17 +63,23 @@ void launch_server()
 
     int backlog = 5;
     listen(sock_fdesc, backlog);
-    std::println("Server listening on 127.0.0.1:8080");
+    std::println("Server listening on {}:{}", ADDRESS, PORT);
 
     for(;;)
     {
         sockaddr_in client_address{};
         socklen_t length = sizeof(client_address);
         int accept_fdesc = accept(sock_fdesc, reinterpret_cast<sockaddr*>(&client_address), &length);
-        std::println("Client connected");
+        if(accept_fdesc < 0)
+        {
+            std::println("Client failed to connect");
+            return;
+        }
+        char client_ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &client_address.sin_addr, client_ip, INET_ADDRSTRLEN);
+        std::println("Client: {}:{} connected", client_ip, ntohs(client_address.sin_port));
 
-        char buffer[4096] = {0};
-
+        char buffer[BUFFER_SIZE] = {0};
         ssize_t bytes_read = recv(accept_fdesc, buffer, sizeof(buffer) - 1, 0);
         if(bytes_read <= 0)
         {
@@ -108,17 +121,18 @@ void launch_server()
             continue;
         }
         
-        memset(buffer, 0, 4096);
+        memset(buffer, 0, BUFFER_SIZE);
         for(;;)
         {
             ssize_t bytes_read = recv(accept_fdesc, buffer, sizeof(buffer) - 1, 0);
-
             if(bytes_read <= 0)
             {
                 std::println("Client disconnected");
                 break;
             }
+            buffer[bytes_read] = '\0';
 
+            std::println("Received: {}", buffer);
             std::println("Received raw bytes: {}", bytes_read);
         }
         
@@ -168,7 +182,7 @@ void connect_client()
         return;
     }
 
-    char handshake_buffer[1024] = {0};
+    char handshake_buffer[HANDSHAKE_BUFFER_SIZE] = {0};
     ssize_t bytes_read = recv(sock_fdesc, handshake_buffer, sizeof(handshake_buffer) - 1, 0);
     if(bytes_read <= 0)
     {
@@ -177,7 +191,7 @@ void connect_client()
     }
     std::println("Handshake response: {}", handshake_buffer);
 
-    char buffer[4096] = {0};
+    char buffer[BUFFER_SIZE] = {0};
     for(;;)
     {
         if (!std::cin.getline(buffer, sizeof(buffer))) 
