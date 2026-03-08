@@ -8,12 +8,12 @@
 #include <random>
 #include <algorithm>
 
-inline uint32_t left_rotate(uint32_t value, uint32_t bits) 
+inline uint32_t left_rotate(const uint32_t value, const uint32_t bits) 
 {
     return (value << bits) | (value >> (32 - bits));
 }
 
-inline std::string convert_to_base64(const std::vector<uint8_t> bytes)
+inline std::string convert_to_base64(const std::vector<uint8_t>& bytes)
 {
     /* https://en.wikipedia.org/wiki/Base64 */
 
@@ -46,7 +46,7 @@ inline std::string convert_to_base64(const std::vector<uint8_t> bytes)
     return base64_res;
 }
 
-inline std::string generate_random_base64(size_t byte_length) {
+inline std::string generate_random_base64(const size_t byte_length) {
 
     std::vector<uint8_t> random_bytes(byte_length);
     std::random_device rd; 

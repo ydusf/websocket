@@ -4,6 +4,8 @@
 #include <iostream>
 #include <string_view>
 #include <string>
+#include <cstddef>
+#include <vector>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -16,6 +18,28 @@ static constexpr ushort BUFFER_SIZE = 4096;
 static constexpr ushort HANDSHAKE_BUFFER_SIZE = 1024;
 static constexpr ushort PORT = 8080;
 static constexpr const char* ADDRESS = "127.0.0.1";
+
+struct SocketFD 
+{
+    int _fdesc;
+    explicit SocketFD(int fdesc) : _fdesc(fdesc) {}
+    
+    SocketFD(const SocketFD&) = delete;
+    SocketFD& operator=(const SocketFD&) = delete;
+    
+    ~SocketFD() 
+    {
+        if (_fdesc >= 0) 
+        {
+            close(_fdesc);
+        }
+    }
+    
+    operator int() const 
+    { 
+        return _fdesc; 
+    }
+};
 
 inline std::pair<int, sockaddr_in> create_address()
 {
@@ -31,23 +55,28 @@ inline int create_socket()
     return socket(AF_INET, SOCK_STREAM, 0); 
 }
 
+inline void parse_ws_frame(const std::vector<uint8_t>& bytes)
+{   
+    
+}
+
 inline void launch_server()
 {
-    int sock_fdesc = create_socket();
-    if (sock_fdesc < 0) 
+    SocketFD server_sock(create_socket());
+    if (server_sock < 0) 
     {
         std::println("Failed to create socket");
         return;
     }
 
-    std::pair<int, sockaddr_in> address = create_address();
-    if (address.first <= 0) 
+    auto [is_valid, address] = create_address();
+    if (is_valid <= 0) 
     {
         std::println("Invalid address");
         return;
     }
 
-    int bound = bind(sock_fdesc, reinterpret_cast<sockaddr*>(&address.second), sizeof(address.second));
+    int bound = bind(server_sock, reinterpret_cast<sockaddr*>(&address), sizeof(address));
     if(bound < 0)
     {
         std::println("Failed to bind to port");
@@ -55,18 +84,19 @@ inline void launch_server()
     }
 
     int backlog = 5;
-    listen(sock_fdesc, backlog);
+    listen(server_sock, backlog);
     std::println("Server listening on {}:{}", ADDRESS, PORT);
 
     for(;;)
     {
         sockaddr_in client_address{};
         socklen_t length = sizeof(client_address);
-        int accept_fdesc = accept(sock_fdesc, reinterpret_cast<sockaddr*>(&client_address), &length);
-        if(accept_fdesc < 0)
+
+        SocketFD client_sock(accept(server_sock, reinterpret_cast<sockaddr*>(&client_address), &length));
+        if(client_sock < 0)
         {
             std::println("Client failed to connect");
-            return;
+            continue;
         }
 
         char client_ip[INET_ADDRSTRLEN];
@@ -76,11 +106,10 @@ inline void launch_server()
         std::string buffer;
         buffer.resize(BUFFER_SIZE);
         
-        ssize_t bytes_read = recv(accept_fdesc, buffer.data(), buffer.size(), 0);
+        ssize_t bytes_read = recv(client_sock, buffer.data(), buffer.size(), 0);
         if(bytes_read <= 0)
         {
-            std::println("Client disconnected");
-            close(accept_fdesc);
+            std::println("Client disconnected during handshake");
             continue;
         }
         buffer.resize(bytes_read);
@@ -105,40 +134,39 @@ inline void launch_server()
                 "Sec-WebSocket-Accept: " + accept_key + "\r\n"
                 "\r\n";
 
-            send(accept_fdesc, response.data(), response.length(), 0);
+            send(client_sock, response.data(), response.length(), 0);
             std::println("WebSocket Upgrade successful!");
         }
         else
         {
             std::println("Invalid WebSocket request received");
-            close(accept_fdesc);
             continue;
         }
         
+        std::vector<uint8_t> bytes(BUFFER_SIZE);
         for(;;)
-        {
-            buffer.resize(BUFFER_SIZE);
-
-            ssize_t bytes_read = recv(accept_fdesc, buffer.data(), buffer.size(), 0);
-            if(bytes_read <= 0)
+        {            
+            ssize_t frame_bytes_read = recv(client_sock, bytes.data(), bytes.size(), 0);
+            if(frame_bytes_read <= 0)
             {
                 std::println("Client disconnected");
                 break;
             }
-            buffer.resize(bytes_read);
 
-            std::println("Received: {}", buffer);
-            std::println("Received raw bytes: {}", bytes_read);
+            for(ssize_t i = 0; i < frame_bytes_read; ++i)
+            {
+                std::cout << bytes[i];
+            }
+            std::println();
+            std::println("Received raw bytes: {}", frame_bytes_read);
         }
-        
-        close(accept_fdesc);
     }
 }
 
 inline void connect_client()
 {
-    int sock_fdesc = create_socket();
-    if (sock_fdesc < 0) 
+    SocketFD client_sock(create_socket());
+    if (client_sock < 0) 
     {
         std::println("Failed to create socket");
         return;
@@ -151,7 +179,7 @@ inline void connect_client()
         return;
     }
 
-    int status = connect(sock_fdesc, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+    int status = connect(client_sock, reinterpret_cast<sockaddr*>(&address), sizeof(address));
     if(status < 0)
     {
         std::println("Server not running");
@@ -169,7 +197,7 @@ inline void connect_client()
         "Sec-WebSocket-Version: 13\r\n"
         "\r\n";
 
-    if(send(sock_fdesc, req.data(), req.length(), 0) <= 0)
+    if(send(client_sock, req.data(), req.length(), 0) <= 0)
     {
         std::println("Server not running");
         return;
@@ -178,7 +206,7 @@ inline void connect_client()
     std::string handshake_buffer;
     handshake_buffer.resize(HANDSHAKE_BUFFER_SIZE);
 
-    ssize_t bytes_read = recv(sock_fdesc, handshake_buffer.data(), handshake_buffer.size(), 0);
+    ssize_t bytes_read = recv(client_sock, handshake_buffer.data(), handshake_buffer.size(), 0);
     if(bytes_read <= 0)
     {
         std::println("Handshake failed");
@@ -198,7 +226,7 @@ inline void connect_client()
         
         if (input_buffer.empty()) continue;
         
-        ssize_t bytes_sent = send(sock_fdesc, input_buffer.data(), input_buffer.length(), 0);
+        ssize_t bytes_sent = send(client_sock, input_buffer.data(), input_buffer.length(), 0);
         if(bytes_sent <= 0)
         {
             std::println("Server not running");
@@ -206,7 +234,4 @@ inline void connect_client()
         }
         std::println("Sent: {}", input_buffer);
     }
-
-    close(sock_fdesc);
 }
-
