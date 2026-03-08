@@ -110,7 +110,7 @@ inline int create_socket()
 inline std::vector<uint8_t> serialize_ws_frame(std::string_view message, FragmentType fragment_type)
 {
     std::vector<uint8_t> frame;
-    size_t length = message.length();
+    std::size_t length = message.length();
 
     switch (fragment_type) 
     {
@@ -154,12 +154,12 @@ inline std::vector<uint8_t> serialize_ws_frame(std::string_view message, Fragmen
         static_cast<uint8_t>(rand() % 256) 
     };
     
-    for (int i = 0; i < 4; ++i) 
+    for (std::size_t i{}; i < 4; ++i) 
     {
         frame.push_back(mask_key[i]);
     }
 
-    for (size_t i = 0; i < length; ++i) 
+    for (std::size_t i{}; i < length; ++i) 
     {
         frame.push_back(message[i] ^ mask_key[i % 4]);
     }
@@ -167,13 +167,13 @@ inline std::vector<uint8_t> serialize_ws_frame(std::string_view message, Fragmen
     return frame;
 }
 
-inline std::optional<Frame> deserialize_ws_frame(std::span<uint8_t> bytes)
+inline std::pair<std::optional<Frame>, std::size_t> deserialize_ws_frame(const std::vector<uint8_t>& bytes)
 {   
-    size_t bytes_length = bytes.size();
+    std::size_t bytes_length = bytes.size();
     if(bytes_length < 2)
     {
         std::cerr << "WebSocket Frame is too small (< 2 bytes)\n";
-        return std::nullopt;
+        return std::make_pair(std::nullopt, 0);
     }
 
     Frame frame{};
@@ -195,7 +195,7 @@ inline std::optional<Frame> deserialize_ws_frame(std::span<uint8_t> bytes)
     {
         if (current_byte + 2 > bytes_length) 
         {
-            return std::nullopt;
+            return std::make_pair(std::nullopt, 0);
         }
         
         frame.actual_payload_length = (static_cast<uint64_t>(bytes[current_byte]) << 8) | static_cast<uint64_t>(bytes[current_byte+1]);
@@ -205,11 +205,11 @@ inline std::optional<Frame> deserialize_ws_frame(std::span<uint8_t> bytes)
     {
         if (current_byte + 8 > bytes_length) 
         {
-            return std::nullopt;
+            return std::make_pair(std::nullopt, 0);
         }
         
         frame.actual_payload_length = 0;
-        for(size_t i = 0; i < 8; ++i)
+        for(std::size_t i{}; i < 8; ++i)
         {
             frame.actual_payload_length = (frame.actual_payload_length << 8) | bytes[current_byte + i];
         }
@@ -220,10 +220,10 @@ inline std::optional<Frame> deserialize_ws_frame(std::span<uint8_t> bytes)
     {
         if (current_byte + 4 > bytes_length) 
         {
-            return std::nullopt;
+            return std::make_pair(std::nullopt, 0);
         }
         
-        for(size_t i = 0; i < 4; ++i)
+        for(std::size_t i{}; i < 4; ++i)
         {
             frame.mask_key[i] = bytes[current_byte + i];
         }
@@ -232,24 +232,24 @@ inline std::optional<Frame> deserialize_ws_frame(std::span<uint8_t> bytes)
 
     if (current_byte + frame.actual_payload_length > bytes_length) 
     {
-        return std::nullopt;
+        return std::make_pair(std::nullopt, 0);
     }
 
     frame.payload.reserve(frame.actual_payload_length);
-    for(size_t i = 0; i < frame.actual_payload_length; ++i)
+    for(std::size_t i{}; i < frame.actual_payload_length; ++i)
     {
         frame.payload.push_back(bytes[current_byte + i]);
     }
 
     if(frame.mask_flag == 1)
     {
-        for(size_t i = 0; i < frame.payload.size(); ++i)
+        for(std::size_t i{}; i < frame.payload.size(); ++i)
         {
             frame.payload[i] = frame.payload[i] ^ frame.mask_key[i % 4];
         }
     }
 
-    return frame;
+    return std::make_pair(frame, current_byte + frame.actual_payload_length);
 }
 
 inline void launch_server()
@@ -308,12 +308,12 @@ inline void launch_server()
 
         std::string_view req_view(handshake_buffer);
         std::string_view key_header = "Sec-WebSocket-Key: ";
-        size_t key_pos = req_view.find(key_header);
+        std::size_t key_pos = req_view.find(key_header);
 
         if(key_pos != std::string_view::npos)
         {
             key_pos += key_header.length();
-            size_t end_pos = req_view.find("\r\n", key_pos);
+            std::size_t end_pos = req_view.find("\r\n", key_pos);
             std::string_view client_key = req_view.substr(key_pos, end_pos - key_pos);
 
             std::string combined = std::string(client_key) + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -335,20 +335,31 @@ inline void launch_server()
             continue;
         }
         
-        std::vector<uint8_t> bytes(BUFFER_WS_SIZE);
+        std::vector<uint8_t> buffer;
         for(;;)
         {            
-            ssize_t frame_bytes_read = recv(client_sock, bytes.data(), bytes.size(), 0);
+            std::vector<uint8_t> temp_buffer(BUFFER_WS_SIZE);
+            ssize_t frame_bytes_read = recv(client_sock, temp_buffer.data(), BUFFER_WS_SIZE, 0);
             if(frame_bytes_read <= 0)
             {
                 std::println("Client disconnected");
                 break;
             }
 
-            std::optional<Frame> frame = deserialize_ws_frame(std::span(bytes.data(), frame_bytes_read));
-            if(frame.has_value())
+            buffer.insert(buffer.end(), temp_buffer.data(), temp_buffer.data() + frame_bytes_read);
+
+            while(!buffer.empty())
             {
-                frame->print();
+                auto [frame, consumed_bytes] = deserialize_ws_frame(buffer);
+                if(frame.has_value())
+                {
+                    frame->print();
+                    buffer.erase(buffer.begin(), buffer.begin() + consumed_bytes);
+                }
+                else
+                {
+                    break;
+                }
             }
         }
     }
@@ -417,16 +428,16 @@ inline void connect_client()
 
         if (input_buffer.empty()) 
         {
-            auto serialized_ws_frame = serialize_ws_frame("", FragmentType::SINGLE);
+            std::vector<uint8_t> serialized_ws_frame = serialize_ws_frame("", FragmentType::SINGLE);
             send(client_sock, serialized_ws_frame.data(), serialized_ws_frame.size(), 0);
             continue;
         }
         
-        const size_t payload_size = input_buffer.size();
+        const std::size_t payload_size = input_buffer.size();
         
-        for (size_t start = 0; start < payload_size; start += LARGEST_WS_PAYLOAD) 
+        for (std::size_t start = 0; start < payload_size; start += LARGEST_WS_PAYLOAD) 
         {
-            size_t count = std::min(static_cast<size_t>(LARGEST_WS_PAYLOAD), payload_size - start);
+            std::size_t count = std::min(static_cast<std::size_t>(LARGEST_WS_PAYLOAD), payload_size - start);
             std::string_view frame_message = std::string_view(input_buffer).substr(start, count);
             
             FragmentType type;

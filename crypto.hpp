@@ -46,14 +46,14 @@ inline std::string convert_to_base64(const std::vector<uint8_t>& bytes)
     return base64_res;
 }
 
-inline std::string generate_random_base64(const size_t byte_length) {
+inline std::string generate_random_base64(const std::size_t byte_length) {
 
     std::vector<uint8_t> random_bytes(byte_length);
     std::random_device rd; 
     std::mt19937 gen(rd());
     std::uniform_int_distribution<int> dist(0, 255);
 
-    for (size_t i{}; i < byte_length; ++i) 
+    for (std::size_t i{}; i < byte_length; ++i) 
     {
         random_bytes[i] = static_cast<uint8_t>(dist(gen));
     }
@@ -84,17 +84,17 @@ inline std::string sha1_and_base64(const std::string& str)
         data.push_back(static_cast<uint8_t>(original_bit_len >> (i * 8)));
     }
 
-    for (size_t chunk_start = 0; chunk_start < data.size(); chunk_start += 64) 
+    for (std::size_t chunk_start = 0; chunk_start < data.size(); chunk_start += 64) 
     {
         uint32_t w[80];
 
-        for (size_t i{}; i < 16; ++i) 
+        for (std::size_t i{}; i < 16; ++i) 
         {
-            size_t idx = chunk_start + i * 4;
+            std::size_t idx = chunk_start + i * 4;
             w[i] = (data[idx] << 24) | (data[idx+1] << 16) | (data[idx+2] << 8) | (data[idx+3]);
         }
 
-        for (size_t i{16}; i < 80; ++i) 
+        for (std::size_t i{16}; i < 80; ++i) 
         {
             w[i] = left_rotate(w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16], 1);
         }
@@ -105,7 +105,7 @@ inline std::string sha1_and_base64(const std::string& str)
         uint32_t d = h[3];
         uint32_t e = h[4];
 
-        for (size_t i{}; i < 80; ++i) 
+        for (std::size_t i{}; i < 80; ++i) 
         {
             uint32_t f;
             uint32_t k;
@@ -147,7 +147,7 @@ inline std::string sha1_and_base64(const std::string& str)
     }
 
     std::vector<uint8_t> hash_bytes;
-    for (size_t i{}; i < 5; ++i) 
+    for (std::size_t i{}; i < 5; ++i) 
     {
         hash_bytes.push_back((h[i] >> 24) & 0xFF);
         hash_bytes.push_back((h[i] >> 16) & 0xFF);
