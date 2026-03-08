@@ -19,6 +19,16 @@ int main(int argc, char* argv[])
     }
     else if(c == 'c')
     {
-        connect_client();
+        SocketFD client_sock = connect_client();
+        
+        std::string input_buffer;
+        for(;;)
+        {
+            if (!std::getline(std::cin, input_buffer)) 
+            {
+                std::println("Input stream closed or invalid.");
+            }
+            send_message(client_sock, "Hello my friend");
+        }
     }
 }

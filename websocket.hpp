@@ -42,6 +42,26 @@ struct SocketFD
     SocketFD(const SocketFD&) = delete;
     SocketFD& operator=(const SocketFD&) = delete;
     
+    SocketFD(SocketFD&& other) noexcept : _fdesc(other._fdesc) 
+    {
+        other._fdesc = -1;
+    }
+    
+    SocketFD& operator=(SocketFD&& other) noexcept 
+    {
+        if (this != &other)
+        {
+            if (_fdesc >= 0) 
+            {
+                close(_fdesc);
+            }
+            
+            _fdesc = other._fdesc;
+            other._fdesc = -1;
+        }
+        return *this;
+    }
+    
     ~SocketFD() 
     {
         if (_fdesc >= 0) 
@@ -390,27 +410,27 @@ inline void launch_server()
     }
 }
 
-inline void connect_client()
+inline SocketFD connect_client()
 {
     SocketFD client_sock(create_socket());
     if (client_sock < 0) 
     {
         std::println("Failed to create socket");
-        return;
+        return client_sock;
     }
 
     auto [is_valid, address] = create_address();
     if (is_valid <= 0) 
     {
         std::println("Invalid address");
-        return;
+        return client_sock;
     }
 
     int status = connect(client_sock, reinterpret_cast<sockaddr*>(&address), sizeof(address));
     if(status < 0)
     {
         std::println("Server not running");
-        return;
+        return client_sock;
     }
     std::println("Connected to server");
 
@@ -427,7 +447,7 @@ inline void connect_client()
     if(send(client_sock, req.data(), req.length(), 0) <= 0)
     {
         std::println("Server not running");
-        return;
+        return client_sock;
     }
 
     std::string handshake_buffer;
@@ -437,61 +457,59 @@ inline void connect_client()
     if(bytes_read <= 0)
     {
         std::println("Handshake failed");
-        return;
+        return client_sock;
     }
     handshake_buffer.resize(bytes_read);
     std::println("Handshake response: {}", handshake_buffer);
+    
+    return client_sock;
+}
 
-    std::string input_buffer;
-    for(;;)
+
+bool send_message(const SocketFD& client_sock, const std::string& input_buffer)
+{
+    if (input_buffer.empty()) 
     {
-        if (!std::getline(std::cin, input_buffer)) 
+        std::vector<uint8_t> serialized_ws_frame = serialize_ws_frame("", FragmentType::SINGLE);
+        send(client_sock, serialized_ws_frame.data(), serialized_ws_frame.size(), 0);
+        return false;
+    }
+    
+    const std::size_t payload_size = input_buffer.size();
+    
+    for (std::size_t start = 0; start < payload_size; start += LARGEST_WS_PAYLOAD) 
+    {
+        std::size_t count = std::min(static_cast<std::size_t>(LARGEST_WS_PAYLOAD), payload_size - start);
+        std::string_view frame_message = std::string_view(input_buffer).substr(start, count);
+        
+        FragmentType type;
+        if (payload_size <= LARGEST_WS_PAYLOAD) 
         {
-            std::println("Input stream closed or invalid.");
+            type = FragmentType::SINGLE;
+        } 
+        else if (start == 0) 
+        {
+            type = FragmentType::FIRST;
+        } 
+        else if (start + count >= payload_size) 
+        {
+            type = FragmentType::LAST;
+        } 
+        else 
+        {
+            type = FragmentType::CONTINUATION;
+        }
+
+        std::vector<uint8_t> serialized_ws_frame = serialize_ws_frame(frame_message, type);
+
+        ssize_t bytes_sent = send(client_sock, serialized_ws_frame.data(), serialized_ws_frame.size(), 0);
+        if(bytes_sent <= 0)
+        {
+            std::println("Server disconnected");
             break;
         }
-
-        if (input_buffer.empty()) 
-        {
-            std::vector<uint8_t> serialized_ws_frame = serialize_ws_frame("", FragmentType::SINGLE);
-            send(client_sock, serialized_ws_frame.data(), serialized_ws_frame.size(), 0);
-            continue;
-        }
-        
-        const std::size_t payload_size = input_buffer.size();
-        
-        for (std::size_t start = 0; start < payload_size; start += LARGEST_WS_PAYLOAD) 
-        {
-            std::size_t count = std::min(static_cast<std::size_t>(LARGEST_WS_PAYLOAD), payload_size - start);
-            std::string_view frame_message = std::string_view(input_buffer).substr(start, count);
-            
-            FragmentType type;
-            if (payload_size <= LARGEST_WS_PAYLOAD) 
-            {
-                type = FragmentType::SINGLE;
-            } 
-            else if (start == 0) 
-            {
-                type = FragmentType::FIRST;
-            } 
-            else if (start + count >= payload_size) 
-            {
-                type = FragmentType::LAST;
-            } 
-            else 
-            {
-                type = FragmentType::CONTINUATION;
-            }
-
-            std::vector<uint8_t> serialized_ws_frame = serialize_ws_frame(frame_message, type);
-
-            ssize_t bytes_sent = send(client_sock, serialized_ws_frame.data(), serialized_ws_frame.size(), 0);
-            if(bytes_sent <= 0)
-            {
-                std::println("Server disconnected");
-                break;
-            }
-            std::println("Sent: {}", frame_message);
-        }
+        std::println("Sent: {}", frame_message);
     }
+
+    return true;
 }
