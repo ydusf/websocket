@@ -58,9 +58,104 @@ inline int create_socket()
 
 inline void parse_ws_frame(std::span<uint8_t> bytes)
 {   
-    for(uint8_t byte : bytes)
+    size_t bytes_length = bytes.size();
+    if(bytes_length < 2)
     {
-        std::cout << byte;
+        std::cerr << "WebSocket Frame is too small (< 2 bytes)\n";
+        return;
+    }
+
+    uint64_t current_byte = 0;
+    
+    uint8_t fin = (bytes[current_byte] >> 7) & 0b00000001; 
+    uint8_t opcode = bytes[current_byte] & 0b00001111;
+
+    current_byte += 1;
+    uint8_t mask_flag = (bytes[current_byte] >> 7) & 0b00000001;
+    uint8_t initial_payload_length = bytes[current_byte] & 0b01111111;
+
+    current_byte += 1;
+
+    uint64_t actual_payload_length = initial_payload_length;
+    
+    if(initial_payload_length == 126)
+    {
+        if (current_byte + 2 > bytes_length) 
+        {
+            return;
+        }
+        
+        actual_payload_length = (static_cast<uint64_t>(bytes[current_byte]) << 8) | static_cast<uint64_t>(bytes[current_byte+1]);
+        current_byte += 2;
+    }
+    else if(initial_payload_length == 127)
+    {
+        if (current_byte + 8 > bytes_length) 
+        {
+            return;
+        }
+        
+        actual_payload_length = 0;
+        for(size_t i = 0; i < 8; ++i)
+        {
+            actual_payload_length = (actual_payload_length << 8) | bytes[current_byte + i];
+        }
+        current_byte += 8;
+    }
+
+    uint8_t mask_key[4] = {0};
+    if(mask_flag == 1)
+    {
+        if (current_byte + 4 > bytes_length) 
+        {
+            return;
+        }
+        
+        for(size_t i = 0; i < 4; ++i)
+        {
+            mask_key[i] = bytes[current_byte + i];
+        }
+        current_byte += 4;
+    }
+
+    if (current_byte + actual_payload_length > bytes_length) 
+    {
+        return;
+    }
+
+    std::vector<uint8_t> payload{};
+    payload.reserve(actual_payload_length);
+    for(size_t i = 0; i < actual_payload_length; ++i)
+    {
+        payload.push_back(bytes[current_byte + i]);
+    }
+
+    if(mask_flag == 1)
+    {
+        for(size_t i = 0; i < payload.size(); ++i)
+        {
+            payload[i] = payload[i] ^ mask_key[i % 4];
+        }
+    }
+
+    std::cout << "FIN: " << static_cast<int>(fin) << '\n';
+    std::cout << "Opcode: " << static_cast<int>(opcode) << '\n';
+    std::cout << "Mask flag: " << static_cast<int>(mask_flag) << '\n';
+    
+    if(mask_flag == 1)
+    {
+        std::cout << "Mask key: ";
+        for(int i = 0; i < 4; ++i) 
+        {
+            std::cout << std::hex << static_cast<int>(mask_key[i]) << " " << std::dec; 
+        }
+        std::cout << '\n';
+    }
+
+    std::cout << "Payload: ";
+    for(uint8_t byte : payload)
+    {
+        std::cout << static_cast<char>(byte); 
     }
     std::cout << '\n';
 }
