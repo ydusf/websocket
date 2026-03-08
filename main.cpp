@@ -28,7 +28,7 @@ int main(int argc, char* argv[])
             {
                 std::println("Input stream closed or invalid.");
             }
-            send_message(client_sock, "Hello my friend");
+            send_message(client_sock, input_buffer);
         }
     }
 }
