@@ -13,7 +13,7 @@ inline uint32_t left_rotate(uint32_t value, uint32_t bits)
     return (value << bits) | (value >> (32 - bits));
 }
 
-std::string convert_to_base64(const std::vector<uint8_t> bytes)
+inline std::string convert_to_base64(const std::vector<uint8_t> bytes)
 {
     /* https://en.wikipedia.org/wiki/Base64 */
 
@@ -46,7 +46,7 @@ std::string convert_to_base64(const std::vector<uint8_t> bytes)
     return base64_res;
 }
 
-std::string generate_random_base64(size_t byte_length) {
+inline std::string generate_random_base64(size_t byte_length) {
 
     std::vector<uint8_t> random_bytes(byte_length);
     std::random_device rd; 
@@ -61,7 +61,7 @@ std::string generate_random_base64(size_t byte_length) {
     return convert_to_base64(random_bytes);
 }
 
-std::string sha1_and_base64(const std::string& str) 
+inline std::string sha1_and_base64(const std::string& str) 
 {
     /* https://en.wikipedia.org/wiki/SHA-1 */
 

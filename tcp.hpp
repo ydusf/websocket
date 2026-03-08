@@ -17,7 +17,7 @@ static constexpr ushort HANDSHAKE_BUFFER_SIZE = 1024;
 static constexpr ushort PORT = 8080;
 static constexpr const char* ADDRESS = "127.0.0.1";
 
-std::pair<int, sockaddr_in> create_address()
+inline std::pair<int, sockaddr_in> create_address()
 {
     sockaddr_in address{};
     address.sin_family = AF_INET;
@@ -26,16 +26,12 @@ std::pair<int, sockaddr_in> create_address()
     return std::make_pair(result, address);
 }
 
-int create_socket()
+inline int create_socket()
 {
-    int domain = AF_INET; // IPv4
-    int type = SOCK_STREAM;
-    int protocol = 0; // TCP
-    int sock_fdesc = socket(domain, type, protocol); 
-    return sock_fdesc;
+    return socket(AF_INET, SOCK_STREAM, 0); 
 }
 
-void launch_server()
+inline void launch_server()
 {
     int sock_fdesc = create_socket();
     if (sock_fdesc < 0) 
@@ -99,8 +95,7 @@ void launch_server()
             size_t end_pos = req_view.find("\r\n", key_pos);
             std::string_view client_key = req_view.substr(key_pos, end_pos - key_pos);
 
-            std::string magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-            std::string combined = std::string(client_key) + magic_string;
+            std::string combined = std::string(client_key) + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
             std::string accept_key = sha1_and_base64(combined);
 
             std::string response = 
@@ -138,11 +133,9 @@ void launch_server()
         
         close(accept_fdesc);
     }
-
-    close(sock_fdesc);
 }
 
-void connect_client()
+inline void connect_client()
 {
     int sock_fdesc = create_socket();
     if (sock_fdesc < 0) 
@@ -200,7 +193,6 @@ void connect_client()
         if (!std::getline(std::cin, input_buffer)) 
         {
             std::println("Input stream closed or invalid.");
-            std::fflush(stdout);
             break;
         }
         
@@ -213,7 +205,6 @@ void connect_client()
             break;
         }
         std::println("Sent: {}", input_buffer);
-        std::fflush(stdout);
     }
 
     close(sock_fdesc);
