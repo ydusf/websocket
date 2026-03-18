@@ -4,13 +4,7 @@
 #include <optional>
 #include <iostream>
 
-enum class FragmentType
-{
-    SINGLE,
-    FIRST,
-    CONTINUATION,
-    LAST
-};
+#include "types.hpp"
 
 struct Frame
 {

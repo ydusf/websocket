@@ -19,6 +19,7 @@
 
 #include "crypto.hpp"
 #include "serialization.hpp"
+#include "utils.hpp"
 
 static constexpr uint16_t HANDSHAKE_BUFFER_SIZE = 1024;
 static constexpr uint16_t BUFFER_WS_SIZE = 60;
@@ -80,20 +81,6 @@ struct Message
         std::cout << '\n';
     }
 };
-
-inline std::pair<int, sockaddr_in> create_address(const std::string& ipv4, uint16_t port)
-{
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_port = htons(port); // host byte order -> network byte order
-    int result = inet_pton(AF_INET, ipv4.data(), &address.sin_addr); // IPv4 address -> binary format
-    return std::make_pair(result, address);
-}
-
-inline int create_socket()
-{
-    return socket(AF_INET, SOCK_STREAM, 0); 
-}
 
 inline SocketFD launch_server(const std::string& ipv4, uint16_t port)
 {
@@ -274,7 +261,6 @@ inline SocketFD connect_client(const std::string& ipv4, uint16_t port)
     return client_sock;
 }
 
-
 bool send_message(const SocketFD& client_sock, const std::string& input_buffer)
 {
     if (input_buffer.empty()) 
@@ -289,25 +275,9 @@ bool send_message(const SocketFD& client_sock, const std::string& input_buffer)
     for (std::size_t start = 0; start < payload_size; start += LARGEST_WS_PAYLOAD) 
     {
         std::size_t count = std::min(static_cast<std::size_t>(LARGEST_WS_PAYLOAD), payload_size - start);
+
         std::string_view frame_message = std::string_view(input_buffer).substr(start, count);
-        
-        FragmentType type;
-        if (payload_size <= LARGEST_WS_PAYLOAD) 
-        {
-            type = FragmentType::SINGLE;
-        } 
-        else if (start == 0) 
-        {
-            type = FragmentType::FIRST;
-        } 
-        else if (start + count >= payload_size) 
-        {
-            type = FragmentType::LAST;
-        } 
-        else 
-        {
-            type = FragmentType::CONTINUATION;
-        }
+        FragmentType type = get_fragment_type(payload_size, start, count, LARGEST_WS_PAYLOAD);
 
         std::vector<uint8_t> serialized_ws_frame = serialize_ws_frame(frame_message, type, true);
 
