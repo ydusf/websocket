@@ -20,9 +20,6 @@
 #include "crypto.hpp"
 #include "serialization.hpp"
 
-static constexpr uint16_t PORT = 8080;
-static constexpr const char* ADDRESS = "127.0.0.1";
-
 static constexpr uint16_t HANDSHAKE_BUFFER_SIZE = 1024;
 static constexpr uint16_t BUFFER_WS_SIZE = 60;
 static constexpr uint8_t LARGEST_WS_FRAME_HEADER = 14;
@@ -84,12 +81,12 @@ struct Message
     }
 };
 
-inline std::pair<int, sockaddr_in> create_address()
+inline std::pair<int, sockaddr_in> create_address(const std::string& ipv4, uint16_t port)
 {
     sockaddr_in address{};
     address.sin_family = AF_INET;
-    address.sin_port = htons(PORT); // host byte order -> network byte order
-    int result = inet_pton(AF_INET, ADDRESS, &address.sin_addr); // IPv4 address -> binary format
+    address.sin_port = htons(port); // host byte order -> network byte order
+    int result = inet_pton(AF_INET, ipv4.data(), &address.sin_addr); // IPv4 address -> binary format
     return std::make_pair(result, address);
 }
 
@@ -98,7 +95,7 @@ inline int create_socket()
     return socket(AF_INET, SOCK_STREAM, 0); 
 }
 
-inline SocketFD launch_server()
+inline SocketFD launch_server(const std::string& ipv4, uint16_t port)
 {
     SocketFD server_sock(create_socket());
     if (server_sock < 0) 
@@ -107,7 +104,7 @@ inline SocketFD launch_server()
         return server_sock;
     }
 
-    auto [is_valid, address] = create_address();
+    auto [is_valid, address] = create_address(ipv4, port);
     if (is_valid <= 0) 
     {
         std::println("Invalid address");
@@ -123,7 +120,7 @@ inline SocketFD launch_server()
 
     int backlog = 5;
     listen(server_sock, backlog);
-    std::println("Server listening on {}:{}", ADDRESS, PORT);
+    std::println("Server listening on {}:{}", ipv4, port);
 
     for(;;)
     {
@@ -221,7 +218,7 @@ inline SocketFD launch_server()
     return server_sock;
 }
 
-inline SocketFD connect_client()
+inline SocketFD connect_client(const std::string& ipv4, uint16_t port)
 {
     SocketFD client_sock(create_socket());
     if (client_sock < 0) 
@@ -230,14 +227,14 @@ inline SocketFD connect_client()
         return client_sock;
     }
 
-    auto [is_valid, address] = create_address();
+    auto [is_valid, server_address] = create_address(ipv4, port);
     if (is_valid <= 0) 
     {
         std::println("Invalid address");
         return client_sock;
     }
 
-    int status = connect(client_sock, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+    int status = connect(client_sock, reinterpret_cast<sockaddr*>(&server_address), sizeof(server_address));
     if(status < 0)
     {
         std::println("Server not running");
@@ -245,10 +242,11 @@ inline SocketFD connect_client()
     }
     std::println("Connected to server");
 
+    std::string host_target = ipv4 + ":" + std::to_string(port);
     std::string base64 = generate_random_base64(16);
     std::string req = 
         "GET /chat HTTP/1.1\r\n"
-        "Host: 127.0.0.1:8080\r\n"
+        "Host: " + host_target + "\r\n"
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
         "Sec-WebSocket-Key: " + base64 + "\r\n"

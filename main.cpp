@@ -15,11 +15,11 @@ int main(int argc, char* argv[])
 
     if(c == 's')
     {
-        launch_server();
+        launch_server("127.0.0.1", 8080);
     }
     else if(c == 'c')
     {
-        SocketFD client_sock = connect_client();
+        SocketFD client_sock = connect_client("127.0.0.1", 8080);
         
         std::string input_buffer;
         for(;;)
